@@ -1,10 +1,18 @@
 from enum import Enum
+from functools import cache
 from http.client import HTTPException
+import json
+import logging
+import time
 from typing import List
 
+from pydantic.json import pydantic_encoder
+from pydantic import BaseModel, TypeAdapter
 from pydantic_core import from_json
 import requests
-from sqlmodel import Field, SQLModel, Session, create_engine, select
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 class TypeEnum(Enum):
@@ -15,8 +23,8 @@ class TypeEnum(Enum):
     POLLOPT = "pollopt"
 
 
-class Item(SQLModel, table=True):
-    id: int = Field(primary_key=True)
+class Item(BaseModel):
+    id: int
     deleted: bool | None = None
     type: TypeEnum | None = None
     by: str | None = None
@@ -49,8 +57,14 @@ def get_max_item() -> int:
     return r.json()
 
 
-def get_item(item_id: int) -> Item:
+@cache
+def get_item(item_id: int, rate_limit = 0.00) -> Item:
+
+    time.sleep(rate_limit)
+
     url = f"{ITEM_URL}/{item_id}.json"
+    logger.info(f"Trying to get {url}")
+
     r = requests.get(url)
 
     if r.status_code != 200:
@@ -61,15 +75,26 @@ def get_item(item_id: int) -> Item:
     return item
 
 
+def save(items: List[Item]):
+    with open("data.json", "w") as f:
+        data = json.dumps(items, default=pydantic_encoder)
+        f.write(data)
+
+
+def load(file_path: str) -> List[Item]:
+    with open(file_path) as f:
+        json_data = json.loads(f)
+        items = TypeAdapter(List[Item]).validate_json(json_data)
+        return items
+
+
 if __name__ == "__main__":
-    engine = create_engine("sqlite:///hn.db")
+    items: List[Item] = []
 
-    with Session(engine) as session:
-        max_item_id = get_max_item()
-        item = get_item(max_item_id)
-        session.add(item)
-        session.commit()
+    max_item_id = get_max_item()
 
-        statement = select(Item).where(Item.id == max_item_id)
-        item = session.exec(statement).first()
-        print(item)
+    for i in range(5):
+        item = get_item(max_item_id - i, rate_limit=0.1)
+        items.append(item)
+
+    save(items)
